@@ -84,32 +84,33 @@ class MouseTeleopApp:
         self.v = [0.0, 0.0, 0.0]
         self.draw_xy()
         self.draw_w()
-        self.update_motion()
+        self.update_label()
 
     def mouse_motion_angular(self, e: Event) -> None:
         self.v[W], self.v[X] = self.relative_motion(e.x, e.y)
         self.draw_xy()
         self.draw_w()
-        self.update_motion()
+        self.update_label()
 
     def mouse_motion_linear(self, e: Event) -> None:
         self.v[Y], self.v[X] = self.relative_motion(e.x, e.y)
         self.draw_xy()
-        self.update_motion()
+        self.update_label()
 
     def mouse_motion_turn(self, e: Event) -> None:
         self.v[W], _ = self.relative_motion(e.x, e.y)
         self.draw_w()
-        self.update_motion()
+        self.update_label()
 
     def mouse_motion_wheelup(self, _: Event) -> None:
         self.v[X] = min(self.v[X] + 0.1, 1.0)
         self.draw_xy()
+        self.update_label()
 
     def mouse_motion_wheeldown(self, _: Event) -> None:
         self.v[X] = max(self.v[X] - 0.1, -1.0)
         self.draw_xy()
-        self.update_motion()
+        self.update_label()
 
     def relative_motion(self, x: float, y: float) -> tuple[float, float]:
         dx = (self.x - x) / self.c_x
@@ -141,12 +142,12 @@ class MouseTeleopApp:
         w = self.v[W] * math.degrees(self.scale[W])
         self.canvas.itemconfig(self.tags[W], extent=w)
 
-    def update_motion(self) -> None:
-        x, y, w = self.scaled_twist()
+    def update_label(self) -> None:
+        x, y, w = self.get_scaled_twist()
         self.text_xy.set(self.format_xy.format(x, y))
         self.text_w.set(self.format_w.format(w))
 
-    def scaled_twist(self) -> None:
+    def get_scaled_twist(self) -> None:
         return [v * s for v, s in zip(self.v, self.scale)]
 
     def __exit__(self, *_) -> None:
@@ -201,7 +202,7 @@ class MouseTeleop(Node):
 
     def publish(self) -> None:
         msg = Twist()
-        x, y, yaw = self.app.scaled_twist()
+        x, y, yaw = self.app.get_scaled_twist()
         msg.linear.x = x
         msg.linear.y = y
         msg.angular.z = yaw
@@ -209,7 +210,7 @@ class MouseTeleop(Node):
 
     def publish_stamped(self) -> None:
         twist = Twist()
-        x, y, yaw = self.app.scaled_twist()
+        x, y, yaw = self.app.get_scaled_twist()
         twist.linear.x = x
         twist.linear.y = y
         twist.angular.z = yaw
