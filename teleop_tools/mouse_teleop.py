@@ -20,9 +20,17 @@ class MouseTeleopApp:
     format_xy = "linear velocity: ({:.2f}, {:.2f}) m/s"
     format_w = "angular velocity: {:.2f} deg/s"
 
-    def __init__(self, scale: list[float], callback: Callable, holonomic: bool) -> None:
+    def __init__(
+        self, scale: list[float], callback: Callable, holonomic: bool, frequency: float
+    ) -> None:
         self.scale = scale
         self.callback = callback
+        self.constant_publish = frequency > 0.0
+        if self.constant_publish:
+            self.frequency = int(1000.0 / frequency)
+        else:
+            self.frequency = 50
+        self.motions = [self.send_motion, self.update_motion]
         self.x = self.y = self.c_x = self.c_y = 0.0
         self.v = [0.0, 0.0, 0.0]
 
@@ -66,11 +74,15 @@ class MouseTeleopApp:
         self.canvas.pack()
 
         self.root.bind("<Control-c>", lambda _: self.root.quit())
-        self.root.after(50, self.check)
         signal.signal(signal.SIGINT, lambda *_: self.root.quit())
+        if self.constant_publish:
+            self.root.after(self.frequency, self.check, self.callback)
+        else:
+            self.root.after(self.frequency, self.check, lambda x, y, w: x)
 
-    def check(self) -> None:
-        self.root.after(50, self.check)
+    def check(self, func) -> None:
+        func(*self.scaled_twist())
+        self.root.after(self.frequency, self.check, func)
 
     def configure(self, e: Event) -> None:
         self.c_x, self.c_y = e.width / 2.0, e.height / 2.0
@@ -85,33 +97,32 @@ class MouseTeleopApp:
         self.v = [0.0, 0.0, 0.0]
         self.draw_xy()
         self.draw_w()
-        self.send_motion()
+        self.motions[self.constant_publish]()
 
     def mouse_motion_angular(self, e: Event) -> None:
         self.v[W], self.v[X] = self.relative_motion(e.x, e.y)
         self.draw_xy()
         self.draw_w()
-        self.send_motion()
+        self.motions[self.constant_publish]()
 
     def mouse_motion_linear(self, e: Event) -> None:
         self.v[Y], self.v[X] = self.relative_motion(e.x, e.y)
         self.draw_xy()
-        self.send_motion()
+        self.motions[self.constant_publish]()
 
     def mouse_motion_turn(self, e: Event) -> None:
         self.v[W], _ = self.relative_motion(e.x, e.y)
         self.draw_w()
-        self.send_motion()
+        self.motions[self.constant_publish]()
 
     def mouse_motion_wheelup(self, _: Event) -> None:
         self.v[X] = min(self.v[X] + 0.1, 1.0)
         self.draw_xy()
-        self.send_motion()
 
     def mouse_motion_wheeldown(self, _: Event) -> None:
         self.v[X] = max(self.v[X] - 0.1, -1.0)
         self.draw_xy()
-        self.send_motion()
+        self.motions[self.constant_publish]()
 
     def relative_motion(self, x: float, y: float) -> tuple[float, float]:
         dx = (self.x - x) / self.c_x
@@ -144,10 +155,16 @@ class MouseTeleopApp:
         self.canvas.itemconfig(self.tags[W], extent=w)
 
     def send_motion(self) -> None:
-        x, y, w = [v * s for v, s in zip(self.v, self.scale)]
+        self.callback(*self.update_motion())
+
+    def update_motion(self) -> None:
+        x, y, w = self.scaled_twist()
         self.text_xy.set(self.format_xy.format(x, y))
         self.text_w.set(self.format_w.format(w))
-        self.callback(x, y, w)
+        return x, y, w
+
+    def scaled_twist(self):
+        return [v * s for v, s in zip(self.v, self.scale)]
 
     def __exit__(self, *_) -> None:
         self.root.quit()
@@ -163,13 +180,16 @@ class MouseTeleop(Node):
         x = self.declare_parameter("scale.x", 0.5).get_parameter_value().double_value
         y = self.declare_parameter("scale.y", x).get_parameter_value().double_value
         w = self.declare_parameter("scale.yaw", 0.5).get_parameter_value().double_value
+        frequency = (
+            self.declare_parameter("frequency", 0.0).get_parameter_value().double_value
+        )
         holonomic = (
             self.declare_parameter("allow_holonomic", False)
             .get_parameter_value()
             .bool_value
         )
         self.pub = self.create_publisher(Twist, "~/cmd_vel", 1)
-        self.app = MouseTeleopApp((x, y, w), self.publish, holonomic)
+        self.app = MouseTeleopApp((x, y, w), self.publish, holonomic, frequency)
 
     def publish(self, x: float, y: float, yaw: float = 0.0) -> None:
         msg = Twist()

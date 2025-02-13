@@ -5,4 +5,5 @@
       y: .3
       yaw: .3
     allow_holonomic: True
+    frequency: 1.0
     use_sim_time: True
