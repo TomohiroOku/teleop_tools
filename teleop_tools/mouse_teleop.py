@@ -78,7 +78,7 @@ class MouseTeleopApp:
         if self.constant_publish:
             self.root.after(self.frequency, self.check, self.callback)
         else:
-            self.root.after(self.frequency, self.check, lambda _=None: _)
+            self.root.after(self.frequency, self.check, lambda x, y, w: x)
 
     def check(self, func) -> None:
         func(*self.scaled_twist())
