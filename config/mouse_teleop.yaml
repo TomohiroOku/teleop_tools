@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    scale:
+      x: .5
+      y: .3
+      yaw: .3
+    allow_holonomic: True
+    use_sim_time: True

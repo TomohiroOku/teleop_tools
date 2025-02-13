@@ -1,0 +1,11 @@
+launch:
+  - node:
+      pkg: teleop_tools
+      exec: mouse_teleop
+      name: mouse_teleop
+      namespace: teleop
+      remap:
+        - from: cmd_vel
+          to: mouse_vel
+      param:
+        - from: $(find-pkg-share teleop_tools)/config/mouse_teleop.yaml
