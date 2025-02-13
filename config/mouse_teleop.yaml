@@ -7,4 +7,4 @@
     allow_holonomic: True
     publish_rate: 1.0
     twist_stamped: True
-    use_sim_time: True
+    use_sim_time: False
