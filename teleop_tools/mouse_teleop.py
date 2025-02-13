@@ -5,12 +5,11 @@ import signal
 import threading
 import tkinter
 from tkinter import Event
-from typing import Callable
 
 import rclpy
-import rclpy.executors
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistStamped
 from rclpy.node import Node
+from rclpy.qos import qos_profile_system_default
 
 X, Y, W = 0, 1, 2
 
@@ -20,17 +19,9 @@ class MouseTeleopApp:
     format_xy = "linear velocity: ({:.2f}, {:.2f}) m/s"
     format_w = "angular velocity: {:.2f} deg/s"
 
-    def __init__(
-        self, scale: list[float], callback: Callable, holonomic: bool, frequency: float
-    ) -> None:
+    def __init__(self, scale: list[float], holonomic: bool) -> None:
         self.scale = scale
-        self.callback = callback
-        self.constant_publish = frequency > 0.0
-        if self.constant_publish:
-            self.frequency = int(1000.0 / frequency)
-        else:
-            self.frequency = 50
-        self.motions = [self.send_motion, self.update_motion]
+        self.frequency = 50
         self.x = self.y = self.c_x = self.c_y = 0.0
         self.v = [0.0, 0.0, 0.0]
 
@@ -75,14 +66,10 @@ class MouseTeleopApp:
 
         self.root.bind("<Control-c>", lambda _: self.root.quit())
         signal.signal(signal.SIGINT, lambda *_: self.root.quit())
-        if self.constant_publish:
-            self.root.after(self.frequency, self.check, self.callback)
-        else:
-            self.root.after(self.frequency, self.check, lambda x, y, w: x)
+        self.root.after(self.frequency, self.check)
 
-    def check(self, func) -> None:
-        func(*self.scaled_twist())
-        self.root.after(self.frequency, self.check, func)
+    def check(self) -> None:
+        self.root.after(self.frequency, self.check)
 
     def configure(self, e: Event) -> None:
         self.c_x, self.c_y = e.width / 2.0, e.height / 2.0
@@ -97,23 +84,23 @@ class MouseTeleopApp:
         self.v = [0.0, 0.0, 0.0]
         self.draw_xy()
         self.draw_w()
-        self.motions[self.constant_publish]()
+        self.update_motion()
 
     def mouse_motion_angular(self, e: Event) -> None:
         self.v[W], self.v[X] = self.relative_motion(e.x, e.y)
         self.draw_xy()
         self.draw_w()
-        self.motions[self.constant_publish]()
+        self.update_motion()
 
     def mouse_motion_linear(self, e: Event) -> None:
         self.v[Y], self.v[X] = self.relative_motion(e.x, e.y)
         self.draw_xy()
-        self.motions[self.constant_publish]()
+        self.update_motion()
 
     def mouse_motion_turn(self, e: Event) -> None:
         self.v[W], _ = self.relative_motion(e.x, e.y)
         self.draw_w()
-        self.motions[self.constant_publish]()
+        self.update_motion()
 
     def mouse_motion_wheelup(self, _: Event) -> None:
         self.v[X] = min(self.v[X] + 0.1, 1.0)
@@ -122,7 +109,7 @@ class MouseTeleopApp:
     def mouse_motion_wheeldown(self, _: Event) -> None:
         self.v[X] = max(self.v[X] - 0.1, -1.0)
         self.draw_xy()
-        self.motions[self.constant_publish]()
+        self.update_motion()
 
     def relative_motion(self, x: float, y: float) -> tuple[float, float]:
         dx = (self.x - x) / self.c_x
@@ -154,16 +141,12 @@ class MouseTeleopApp:
         w = self.v[W] * math.degrees(self.scale[W])
         self.canvas.itemconfig(self.tags[W], extent=w)
 
-    def send_motion(self) -> None:
-        self.callback(*self.update_motion())
-
     def update_motion(self) -> None:
         x, y, w = self.scaled_twist()
         self.text_xy.set(self.format_xy.format(x, y))
         self.text_w.set(self.format_w.format(w))
-        return x, y, w
 
-    def scaled_twist(self):
+    def scaled_twist(self) -> None:
         return [v * s for v, s in zip(self.v, self.scale)]
 
     def __exit__(self, *_) -> None:
@@ -180,22 +163,60 @@ class MouseTeleop(Node):
         x = self.declare_parameter("scale.x", 0.5).get_parameter_value().double_value
         y = self.declare_parameter("scale.y", x).get_parameter_value().double_value
         w = self.declare_parameter("scale.yaw", 0.5).get_parameter_value().double_value
-        frequency = (
-            self.declare_parameter("frequency", 0.0).get_parameter_value().double_value
+        publish_rate = (
+            self.declare_parameter("publish_rate", 1.0)
+            .get_parameter_value()
+            .double_value
         )
+        if publish_rate > 1000.0:
+            self.get_logger().warn(
+                "publish rate is 1000.0 Hz at maximum. setting 1000.0 Hz"
+            )
+            publish_rate = 1000.0
+        elif publish_rate < 0.001:
+            self.get_logger().warn(
+                "publish rate is 0.001 Hz at minimum. setting 0.001 Hz"
+            )
+            publish_rate = 0.001
         holonomic = (
             self.declare_parameter("allow_holonomic", False)
             .get_parameter_value()
             .bool_value
         )
-        self.pub = self.create_publisher(Twist, "~/cmd_vel", 1)
-        self.app = MouseTeleopApp((x, y, w), self.publish, holonomic, frequency)
+        use_stamped_twist = (
+            self.declare_parameter("twist_stamped", False)
+            .get_parameter_value()
+            .bool_value
+        )
 
-    def publish(self, x: float, y: float, yaw: float = 0.0) -> None:
+        self.app = MouseTeleopApp((x, y, w), holonomic)
+        if use_stamped_twist:
+            msg_type, callback = TwistStamped, self.publish_stamped
+        else:
+            msg_type, callback = Twist, self.publish
+        self.pub = self.create_publisher(
+            msg_type, "~/cmd_vel", qos_profile_system_default
+        )
+        self.timer = self.create_timer(1.0 / publish_rate, callback)
+
+    def publish(self) -> None:
         msg = Twist()
+        x, y, yaw = self.app.scaled_twist()
         msg.linear.x = x
         msg.linear.y = y
         msg.angular.z = yaw
+        self.pub.publish(msg)
+
+    def publish_stamped(self) -> None:
+        twist = Twist()
+        x, y, yaw = self.app.scaled_twist()
+        twist.linear.x = x
+        twist.linear.y = y
+        twist.angular.z = yaw
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "mouse_teleop"
+        msg.twist = twist
         self.pub.publish(msg)
 
     def run(self) -> None:
